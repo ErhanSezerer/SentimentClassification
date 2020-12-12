@@ -56,7 +56,9 @@ def train_bert(num_epochs, model, train_iter, dev_iter, optimizer, device, check
             model.zero_grad()
 
             # forward pass
-            loss, logits = model(input_ids, token_type_ids=None, attention_mask=att_masks, labels=labels)
+            outputs = model(input_ids, token_type_ids=None, attention_mask=att_masks, labels=labels)
+            loss = outputs["loss"]
+            logits = outputs["logits"]
 
             # record preds, trues
             _pred = logits.cpu().data.numpy()
@@ -158,7 +160,9 @@ def eval_bert(dev_iter, model, device):
 
         # forward pass
         with torch.no_grad():
-            loss, logits = model(input_ids, token_type_ids=None, attention_mask=att_masks, labels=labels)
+            outputs = model(input_ids, token_type_ids=None, attention_mask=att_masks, labels=labels)
+            loss = outputs["loss"]
+            logits = outputs["logits"]
         dev_loss += loss.item()
 
         # record preds, trues
@@ -193,7 +197,9 @@ def test_bert(test_iter, model, device):
 
          # forward pass
         with torch.no_grad():
-            loss, logits = model(input_ids, token_type_ids=None, attention_mask=att_masks, labels=labels)
+            outputs = model(input_ids, token_type_ids=None, attention_mask=att_masks, labels=labels)
+            loss = outputs["loss"]
+            logits = outputs["logits"]
 
          # record preds, trues
         _pred = logits.cpu().data.numpy()
