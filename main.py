@@ -7,19 +7,12 @@ import pandas as pd
 import numpy as np
 import random
 from torch.utils.data import RandomSampler, SequentialSampler, DataLoader
-from transformers import BertForSequenceClassification, AdamW
+from transformers import BertForSequenceClassification, AdamW, XLNetForSequenceClassification
 from args import args
 from bert import train_bert, test_bert, load_model
-from preprocess import read_samples_bert, read_samples_ML, read_samples_doc2vec
+from xlnet import train_xlnet, test_xlnet, load_model_xlnet
+from preprocess import read_samples_bert, read_samples_xlnet
 
-from gensim.models.doc2vec import Doc2Vec
-from doc2vec import train_doc2vec, test_doc2vec
-from sklearn.linear_model import LogisticRegression
-
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.multiclass import OneVsRestClassifier
-from sklearn.svm import SVC
-from ML import train_ML, test_ML
 
 # Setup colorful logging
 logging.basicConfig()
@@ -50,7 +43,7 @@ def run_bert(device, results_file):
 
 	#get the data
 	logging.info('Constructing datasets...')
-	train_data, dev_data, test_data = read_samples_bert(args.data_dir)
+	train_data, dev_data, test_data = read_samples_bert()
 
 	#prepare the model and data
 	model = BertForSequenceClassification.from_pretrained("bert-base-uncased", num_labels=args.num_label,
@@ -88,87 +81,56 @@ def run_bert(device, results_file):
 
 
 
-def run_randomforest(results_file):
-	#get the data
-	train_features, dev_features, test_features, train_labels, dev_labels, test_labels = read_samples_ML(args.data_dir)
+def run_xlnet(device, results_file):
 
-	#prepare the model
-	model = RandomForestClassifier(n_estimators=args.estimators)
+	set_seed(args.seed)
+	torch.cuda.empty_cache()
+
+	#get the data
+	logging.info('Constructing datasets...')
+	train_data, dev_data, test_data = read_samples_xlnet()
+
+	#prepare the model and data
+	model = XLNetForSequenceClassification.from_pretrained("xlnet-base-cased", num_labels=args.num_label,
+                                                          output_attentions=False, output_hidden_states=False)
+	param_optimizer = list(model.named_parameters())
+	no_decay = ['bias', 'gamma', 'beta']
+	optimizer_grouped_parameters = [
+    	{'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)],
+    	 'weight_decay_rate': 0.01},
+    	{'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)],
+     	'weight_decay_rate': 0.0}]
+
+	optimizer = AdamW(optimizer_grouped_parameters, lr=args.lr, eps=1e-6)
+	epoch = args.epochs
+
+	train_iter = DataLoader(train_data, sampler=RandomSampler(train_data), batch_size=32)
+	dev_iter = DataLoader(dev_data, sampler=SequentialSampler(dev_data), batch_size=32)
+	test_iter = DataLoader(test_data, sampler=SequentialSampler(test_data), batch_size=32)
+
 
 	#create model save directory
 	checkpoint_dir = os.path.join(args.checkpoint_dir, args.model_name)
 	if not os.path.exists(checkpoint_dir):
 		os.makedirs(checkpoint_dir)
 
-	#run tests
+
+	#run the tests
 	logging.info(
         "Number of training samples {train}, number of dev samples {dev}, number of test samples {test}".format(
-            train=train_features.shape[0],
-            dev=dev_features.shape[0],
-            test=test_features.shape[0]))
+            train=len(train_data),
+            dev=len(dev_data),
+            test=len(test_data)))
 
-	train_ML(model, train_features, dev_features, train_labels, dev_labels, checkpoint_dir, results_file)
-	acc, f1, recall, prec, f1_ave, recall_ave, prec_ave = test_ML(model, test_features, test_labels)
+	train_xlnet(epoch, model, train_iter, dev_iter, optimizer, device, checkpoint_dir, results_file)
 
+	model = load_model(checkpoint_dir)
+	acc, f1, recall, prec, f1_ave, recall_ave, prec_ave = test_xlnet(test_iter, model, device)
+	del model
 	return acc, f1, recall, prec, f1_ave, recall_ave, prec_ave
 
 
 
-
-
-def run_SVM(results_file):
-	#get the data
-	train_features, dev_features, test_features, train_labels, dev_labels, test_labels = read_samples_ML(args.data_dir)
-
-	#prepare the model
-	model = OneVsRestClassifier(SVC())
-
-	#create model save directory
-	checkpoint_dir = os.path.join(args.checkpoint_dir, args.model_name)
-	if not os.path.exists(checkpoint_dir):
-		os.makedirs(checkpoint_dir)
-
-	#run tests
-	logging.info(
-        "Number of training samples {train}, number of dev samples {dev}, number of test samples {test}".format(
-            train=train_features.shape[0],
-            dev=dev_features.shape[0],
-            test=test_features.shape[0]))
-
-	train_ML(model, train_features, dev_features, train_labels, dev_labels, checkpoint_dir, results_file)
-	acc, f1, recall, prec, f1_ave, recall_ave, prec_ave = test_ML(model, test_features, test_labels)
-
-	return acc, f1, recall, prec, f1_ave, recall_ave, prec_ave
-
-
-
-
-
-
-def run_doc2vec(results_file):
-	#get the data
-	train_samples, dev_samples, test_samples, dev_labels, test_labels = read_samples_doc2vec(args.data_dir)
-
-	#prepare the model
-	model = Doc2Vec(size=args.emb_dimension, alpha=args.lr, min_alpha=0.00025, min_count=1, dm=1)
-	logreg = LogisticRegression()
-	
-	#create model save directory
-	checkpoint_dir = os.path.join(args.checkpoint_dir, args.model_name)
-	if not os.path.exists(checkpoint_dir):
-		os.makedirs(checkpoint_dir)
-
-	#run tests
-	logging.info(
-        "Number of training samples {train}, number of dev samples {dev}, number of test samples {test}".format(
-            train=len(train_samples),
-            dev=len(dev_samples),
-            test=len(test_samples)))
-
-	train_doc2vec(args.epochs, model, logreg, train_samples, dev_samples, dev_labels, checkpoint_dir, results_file)
-	acc, f1, recall, prec, f1_ave, recall_ave, prec_ave = test_doc2vec(test_samples, test_labels, model, logreg)
-
-	return acc, f1, recall, prec, f1_ave, recall_ave, prec_ave
 
 
 
@@ -185,15 +147,10 @@ if __name__ == '__main__':
 		device = 'cuda' if args.use_gpu and torch.cuda.is_available else 'cpu'
 		file_name = '{model_name}_epochs_{epoch}_lr_{lr}.csv'.format(model_name='bert', epoch=args.epochs, lr=args.lr)
 		args.model_name = '{model_name}_epochs_{epoch}_lr_{lr}'.format(model_name='bert', epoch=args.epochs, lr=args.lr)
-	elif args.classifier == "randomforest":
-		file_name = '{model_name}_estimators_{estimators}.csv'.format(model_name='randomforest', estimators=args.estimators)
-		args.model_name = '{model_name}_estimators_{estimators}'.format(model_name='randomforest', estimators=args.estimators)
-	elif args.classifier == "svm":
-		file_name = '{model_name}.csv'.format(model_name='svm')
-		args.model_name = '{model_name}'.format(model_name='svm')
-	elif args.classifier == "doc2vec":
-		file_name = '{model_name}_dim_{dim}_epochs_{epoch}_lr_{lr}.csv'.format(model_name='doc2vec', epoch=args.epochs, lr=args.lr, dim=args.emb_dimension)
-		args.model_name = '{model_name}_dim_{dim}_epochs_{epoch}_lr_{lr}'.format(model_name='doc2vec', epoch=args.epochs, lr=args.lr, dim=args.emb_dimension)
+	elif args.classifier == "xlnet":
+		device = 'cuda' if args.use_gpu and torch.cuda.is_available else 'cpu'
+		file_name = '{model_name}_epochs_{epoch}_lr_{lr}.csv'.format(model_name='xlnet', epoch=args.epochs, lr=args.lr)
+		args.model_name = '{model_name}_epochs_{epoch}_lr_{lr}'.format(model_name='xlnet', epoch=args.epochs, lr=args.lr)
 		
 
 	results_file = os.path.join(args.checkpoint_dir, file_name)
@@ -207,12 +164,8 @@ if __name__ == '__main__':
 	#run tests
 	if args.classifier == "bert":
 		acc, f1, recall, prec, f1_ave, recall_ave, prec_ave = run_bert(device, results_file)
-	elif args.classifier == "randomforest":
-		acc, f1, recall, prec, f1_ave, recall_ave, prec_ave = run_randomforest(results_file)
-	elif args.classifier == "svm":
-		acc, f1, recall, prec, f1_ave, recall_ave, prec_ave = run_SVM(results_file)
-	elif args.classifier == "doc2vec":
-		acc, f1, recall, prec, f1_ave, recall_ave, prec_ave = run_doc2vec(results_file)
+	elif args.classifier == "xlnet":
+		acc, f1, recall, prec, f1_ave, recall_ave, prec_ave = run_xlnet(device, results_file)
 
 	#print and log the results
 	stats_template = '\nAccuracy: {acc}\n' \
